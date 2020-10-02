@@ -51,14 +51,23 @@ class BCELoss2d(nn.Module):
         target  = target.view(-1)
         return self.bce_loss(predict, target)
 
-class CrossEntropyLoss2d(nn.Module):
+class NLLLoss2d(nn.Module):
     def __init__(self, weight=None, size_average=True):
         super().__init__()
         self.nll_loss = nn.NLLLoss(weight, size_average, reduction='mean') #NLLLoss2d
 
-    def forward(self, inputs, targets):
-        return self.nll_loss(F.log_softmax(inputs, dim=-1), targets)
-    
+    def forward(self, predict, target):
+        return self.nll_loss(F.log_softmax(predict, dim=-1), target)
+
+class CrossEntropyLoss2d(nn.Module):
+    def __init__(self, weight=None, size_average=True):
+        super().__init__()
+        self.ce_loss = nn.CrossEntropyLoss(weight, size_average, reduction='mean') #NLLLoss2d
+
+    def forward(self, predict, target):
+        predict = predict.view(-1)
+        target  = target.view(-1)
+        return self.ce_loss(predict, target)
     
 class DiceLoss(nn.Module):
 

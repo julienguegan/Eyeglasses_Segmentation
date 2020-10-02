@@ -18,12 +18,14 @@ def display_batch(batch_tensor, nrow=5):
 
 
 
-def IoU_score(outputs, labels):
+def IoU_score(predictions, labels):
 
-    outputs.requires_grad = False
-    intersection = torch.logical_and(outputs, labels).float().sum((1, 2))
-    union        = torch.logical_or(outputs, labels).float().sum((1, 2))
-    
+    #predictions.requires_grad = False
+    predictions = predictions.detach()
+    intersection = torch.logical_and(predictions, labels).float().sum((1, 2))
+    union        = torch.logical_or(predictions, labels).float().sum((1, 2))
+    #intersection = (predictions & labels).float().sum((1, 2))
+    #union        = (predictions | labels).float().sum((1, 2))
     iou = intersection / union
-        
+    
     return iou.mean()

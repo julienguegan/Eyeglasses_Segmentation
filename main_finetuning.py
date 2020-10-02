@@ -18,8 +18,8 @@ import os
 import copy
 import glob
 from bisenet import BiSeNet
-from dataset import CustomDataset, display_batch, display_segmentation
-from loss import OhemCELoss, BCELoss2d, DiceLoss, CrossEntropyLoss2d
+from dataset import CustomDataset, display_batch, display_segmentation, display_result
+from loss import OhemCELoss, BCELoss2d, DiceLoss, CrossEntropyLoss2d, NLLLoss2d
 from metrics import IoU_score
 from datetime import datetime
 from torch.utils.tensorboard import SummaryWriter
@@ -34,26 +34,33 @@ data_root = "C:\\Users\\gueganj\\Desktop\\My_DataBase\\shuang_data\\"
 # Models to choose from [resnet, alexnet, vgg, squeezenet, densenet, inception]
 model_name = "unet"
 # Number of classes in the dataset
-num_classes = 2
+num_classes = 1
 # Batch size for training (change depending on how much memory you have)
 batch_size = 8
 # Learning rate
-lr = 0.001
+lr = 0.05
 # Momentum
 momentum = 0.99
 # Weight decay
 wd = 0
 # Number of epochs to train for 
-num_epochs = 50
+num_epochs = 100
+# prediction threshold
+threshold = 0.25
+# size of image in input
+input_size = 224
+# total number of image used
+size_dataset = 100
 # Flag for feature extracting. When False, we finetune the whole model, when True we only update the reshaped layer params
-feature_extract = True
+feature_extract = False
 # Flag for using Tensorboard tool
 use_tensorboard = True
 # Flag for using data augmentation
 use_augmentation = False
-# Flag for using a learing rate scheduler
-use_scheduler = True
-# Detect if we have a GPU available
+# Flag for using a learning rate scheduler
+use_scheduler = "cosine"
+# Load checkpoint
+load_checkpoint = False
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 # ======================  Model  ============================ #
@@ -64,32 +71,25 @@ def set_parameter_requires_grad(model, feature_extracting):
         for param in model.parameters():
             param.requires_grad = False
 
-# Load
+
 if model_name == "bisenet":
+    # Load
     file_path  = 'C:\\Users\\gueganj\\Desktop\\face parsing - PyTorch\\res\\cp\\79999_iter.pth'
     model = BiSeNet(n_classes=19) # trained on 19 classes
     model.load_state_dict(torch.load(file_path, map_location=device))
-
-elif model_name == "unet":
-    import segmentation_models_pytorch as smp
-    model = smp.Unet(encoder_name='mobilenet_v2', classes=2)
-
-model.eval()
-
-# change final layer to tune and output only 2 classes
-set_parameter_requires_grad(model, feature_extract)
-if model_name == "bisenet":
+    # change final layer to tune and output only 2 classes
+    set_parameter_requires_grad(model, feature_extract)
     model.conv_out.conv_out   = nn.Conv2d(256, num_classes, kernel_size=(1, 1), stride=(1, 1), bias=False)
     model.conv_out16.conv_out = nn.Conv2d(64, num_classes, kernel_size=(1, 1), stride=(1, 1), bias=False)
     model.conv_out32.conv_out = nn.Conv2d(64, num_classes, kernel_size=(1, 1), stride=(1, 1), bias=False)
 elif model_name == "unet":
+    import segmentation_models_pytorch as smp
+    model = smp.Unet(encoder_name='mobilenet_v2', activation=None) # Activation=None because I apply activation layer myself
     model.segmentation_head[0] = nn.Conv2d(16, num_classes, kernel_size=(1, 1), stride=(1, 1), bias=False)
 
 model.to(device)
 
 # ====================== Data ====================== #
-
-input_size = 224
 
 # data augmentation
 if use_augmentation:
@@ -113,22 +113,21 @@ else:
 # path
 folder_data = glob.glob(os.path.join(data_root,"images\\*.png"))
 folder_mask = glob.glob(os.path.join(data_root,"masks\\*.png"))
-# suffle the 2 lists the same way
+# suffle the 2 lists the same way (to be sure)
 lists_shuffled = list(zip(folder_data, folder_mask))
 random.shuffle(lists_shuffled)
 folder_data, folder_mask = zip(*lists_shuffled)
 # split in train/test
-len_data   = 200 #len(folder_data)
-train_size = 0.8
-train_image_paths = folder_data[:int(len_data*train_size)]
-test_image_paths  = folder_data[int(len_data*train_size):]
-train_mask_paths  = folder_mask[:int(len_data*train_size)]
-test_mask_paths   = folder_mask[int(len_data*train_size):]
+train_size   = 0.8
+train_image_paths = folder_data[:int(size_dataset*train_size)]
+test_image_paths  = folder_data[int(size_dataset*train_size):]
+train_mask_paths  = folder_mask[:int(size_dataset*train_size)]
+test_mask_paths   = folder_mask[int(size_dataset*train_size):]
 # create DataLoader
 train_dataset = CustomDataset(train_image_paths, train_mask_paths, transform)
 test_dataset  = CustomDataset(test_image_paths, test_mask_paths)
 train_loader  = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=0)
-test_loader   = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
+test_loader   = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=0)
 
 # ====================== Optimizer ====================== #
 
@@ -137,18 +136,18 @@ params_to_update = model.parameters()
 print("Parameters to learn:")
 if feature_extract:
     params_to_update = []
-    for name,param in model.named_parameters():
+    for name, param in model.named_parameters():
         if param.requires_grad == True:
             params_to_update.append(param)
             print("\t",name)
 else:
-    for name,param in model.named_parameters():
+    for name, param in model.named_parameters():
         if param.requires_grad == True:
             print("\t",name)
 
 # Observe that all parameters are being optimized
-optimizer_ft = optim.SGD(params_to_update, lr=lr, momentum=0.9)
-#optimizer_ft = optim.Adam(params_to_update, lr=lr, weight_decay=wd)
+#optimizer_ft = optim.SGD(params_to_update, lr, momentum)
+optimizer_ft = optim.Adam(params_to_update, lr=lr, weight_decay=wd)
 #optimizer_ft = optim.RMSprop(params_to_update, lr=lr)
 #optimizer_ft = optim.ASGD(params_to_update, lr=lr)
 #optimizer_ft = optim.Adamax(params_to_update, lr=lr)
@@ -156,17 +155,23 @@ optimizer_ft = optim.SGD(params_to_update, lr=lr, momentum=0.9)
 #optimizer_ft = optim.Adadelta(params_to_update)
                   
 if use_scheduler:
-    steps = len(train_loader)
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer_ft, steps)
+    if use_scheduler=='cosine':
+        scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer_ft, len(train_loader))
+    elif use_scheduler=='exponential':
+        scheduler = optim.lr_scheduler.ExponentialLR(optimizer_ft, gamma=1.5)
+    else:
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer_ft)
 
 # ====================== Loss ====================== #
 
-criterion = BCELoss2d() #DiceLoss() #CrossEntropyLoss2d()  #DiceLoss()#
+# criterion = nn.CrossEntropyLoss() #BCELoss2d() #DiceLoss() #CrossEntropyLoss2d() #DiceLoss() #NLLLoss2d
+criterion = nn.BCEWithLogitsLoss()
 
 # ====================== Training ====================== #
 date_time = datetime.now().strftime("%d_%m_%Y-%H_%M")
 if use_tensorboard:
     writer    = SummaryWriter('tensorboard_logs/' + date_time)
+    # to do : configure max_queue to SummaryWriter()
     images, labels = iter(train_loader).next()
     img_grid = utils.make_grid(images, nrow=4, padding=10)
     lbl_grid = utils.make_grid(labels.unsqueeze(1), nrow=4, padding=10)
@@ -175,8 +180,18 @@ if use_tensorboard:
     writer.add_graph(model, images)
     writer.close
 
+# ====================== Checkpoint ====================== #
 
-def train_model(model, dataloaders, optimizer, criterion, num_epochs=25):
+if load_checkpoint:
+    checkpoint = torch.load(load_checkpoint)
+    model.load_state_dict(checkpoint['model'])
+    optimizer_ft.load_state_dict(checkpoint['optimizer'])
+    epoch = checkpoint['epoch']
+    loss  = checkpoint['loss']
+    score = checkpoint['IoU_score']
+
+
+def train_model(model, dataloaders, optimizer, criterion, num_epochs=25, threshold=0.5):
     since = time.time()
 
     val_acc_history = []
@@ -204,12 +219,11 @@ def train_model(model, dataloaders, optimizer, criterion, num_epochs=25):
                 # FORWARD
                 with torch.set_grad_enabled(phase == 'train'):
                     # Get model outputs and calculate loss
-                    out                 = model(inputs)
-                    _, predictions      = torch.max(out, 1)
-                    predictions = predictions.float()
-                    predictions.requires_grad = True
-                    loss = criterion(predictions, labels)
-
+                    output = model(inputs)
+                    logits = output.squeeze(1).detach()
+                    predictions = torch.sigmoid(logits) > threshold
+                    loss = criterion(output.squeeze(1), labels)
+                    
                     # BACKWARD (in training phase)
                     if phase == 'train':
                         loss.backward()
@@ -217,17 +231,17 @@ def train_model(model, dataloaders, optimizer, criterion, num_epochs=25):
                         if use_scheduler:
                             scheduler.step()
                         
-
                 # statistics
                 running_loss += loss.item() #* inputs.size(0)
                 running_iou  += IoU_score(predictions, labels)
-                if use_tensorboard and (i%4==0):
+                if use_tensorboard and (i%int(batch_size)==0):
                     writer.add_scalar('loss/'+phase, running_loss/(i+1), 1+i+epoch*len(dataloaders[phase]))
                     writer.add_scalar('score/'+phase, running_iou/(i+1), 1+i+epoch*len(dataloaders[phase]))
-                    writer.add_figure('prediction', display_segmentation(inputs[0,:,:,:].permute(1,2,0), predictions[0,:,:]), global_step=1+i+epoch*len(dataloaders[phase]))
-                    #writer.add_scalars('loss', {phase: running_loss/i}, i*(epoch+1))
-                    #writer.add_scalars('score', {phase: running_iou/i}, i*(epoch+1))
-                    tqdm.write('    {:2d} : Loss={:.4f} - IoU={:.4f} - iter={}'.format(i, running_loss/(i+1), running_iou/(i+1), 1+i+epoch*len(dataloaders[phase])))
+                    inputs_0  = inputs[0,:,:,:].permute(1,2,0)
+                    predict_0 = predictions[0,:,:]
+                    proba_0   = torch.sigmoid(logits[0,:,:])
+                    label_0   = labels[0,:,:]
+                    writer.add_figure('Result', display_result(inputs_0, label_0, predict_0, proba_0), global_step=1+i+epoch*len(dataloaders[phase]))
                     if use_scheduler:
                         writer.add_scalar('lr/'+phase, scheduler.get_last_lr()[0], 1+i+epoch*len(dataloaders[phase]))
 
@@ -250,11 +264,9 @@ def train_model(model, dataloaders, optimizer, criterion, num_epochs=25):
 
     time_elapsed = time.time() - since
     print('Training complete in {:.0f}m {:.0f}s'.format(time_elapsed // 60, time_elapsed % 60))
-    print('Best val Acc: {:4f}'.format(best_acc))
-
-    # load best model weights
-    model.load_state_dict(best_model)
-    return model, val_acc_history
+    print('Best val Accuracy: {:4f}'.format(best_acc))
+    
+    return best_model, best_acc
 
 
 # In[17]:
@@ -265,10 +277,23 @@ dataloaders_dict = {}
 dataloaders_dict['train'] = train_loader
 dataloaders_dict['val']   = test_loader
 
-# Train and evaluate
-model_ft, hist = train_model(model, dataloaders_dict, optimizer_ft, criterion, num_epochs=num_epochs)
+# Train and evaluate 
+model_ft, best_acc = train_model(model, dataloaders_dict, optimizer_ft, criterion, num_epochs, threshold)
 
 
+writer.add_hparams({"Image size":int(input_size),
+                   "shuang/Julien":"shuang",
+                   "Dataset size":int(size_dataset),
+                   "Architecture":model_name,
+                   "Learning rate":lr,
+                   "Momentum":momentum,
+                   "LR scheduler": scheduler.__class__.__name__ if use_scheduler else 'None',
+                   "Optimisation algorithm":optimizer_ft.__class__.__name__,
+                   "Epoch number":int(num_epochs),
+                   "Batch size":int(batch_size),
+                   "Loss":criterion.__class__.__name__,
+                   "Threshold sigmoid":threshold}, 
+                   {'hparam/IoU score':best_acc})
 
 '''
 score_thres = 0.7

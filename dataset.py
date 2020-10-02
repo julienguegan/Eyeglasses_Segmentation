@@ -6,7 +6,7 @@ from torch.utils.data.dataset import Dataset
 from torchvision import utils
 import matplotlib.pyplot as plt
 import random
-
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 class CustomDataset(Dataset):
     
@@ -41,7 +41,6 @@ class CustomDataset(Dataset):
 
 
 def display_batch(batch_tensor, nrow=5):
-    
     # if label add a dimension and *255 to be visible
     if len(batch_tensor.shape)==3:
         batch_tensor = 255*batch_tensor.unsqueeze(1)
@@ -52,11 +51,40 @@ def display_batch(batch_tensor, nrow=5):
     plt.axis('off')
     plt.show()
     
-def display_segmentation(image, label):
+def display_segmentation(image, label, colorbar=False):
     fig = plt.figure(figsize=(12, 10))
     mask = np.ma.masked_where(label == 0, label)
     plt.imshow(image)
     plt.imshow(mask, cmap='jet', alpha=0.5) # interpolation='none'
     plt.axis('off')
+    if colorbar: # for logit
+        plt.colorbar()
     return fig
     
+
+def display_result(image, label, predict, proba):
+    
+    fig = plt.figure(figsize=(15, 10))
+    mask_predict = np.ma.masked_where(predict == 0, predict)
+    # ground truth
+    plt.subplot(131)
+    plt.imshow(label) # interpolation='none'
+    plt.axis('off')
+    plt.title('ground truth')
+    # prediction
+    plt.subplot(132)
+    plt.imshow(image)
+    plt.imshow(mask_predict, cmap='jet', alpha=0.5) # interpolation='none'
+    plt.axis('off')
+    plt.title('prediction')
+    # probabilities
+    plt.subplot(133)
+    plt.imshow(image)
+    plt.title('probabilities')
+    plt.imshow(proba, cmap='jet', alpha=0.5) # interpolation='none'
+    plt.axis('off')
+    divider = make_axes_locatable(plt.gca())
+    cax = divider.append_axes("right", size="5%", pad=0.05)
+    plt.colorbar(cax=cax)
+    
+    return fig
