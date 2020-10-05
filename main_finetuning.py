@@ -31,7 +31,7 @@ init()
 
 # Top level data directory. Here we assume the format of the directory conforms to the ImageFolder structure
 data_root = "C:\\Users\\gueganj\\Desktop\\My_DataBase\\shuang_data\\"
-# Models to choose from [resnet, alexnet, vgg, squeezenet, densenet, inception]
+# Models
 model_name = "unet"
 # Number of classes in the dataset
 num_classes = 1
