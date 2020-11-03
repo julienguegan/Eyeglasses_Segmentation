@@ -232,7 +232,7 @@ class BiSeNet(nn.Module):
         feat_out   = F.interpolate(feat_out, (H, W), mode='bilinear', align_corners=True)
         feat_out16 = F.interpolate(feat_out16, (H, W), mode='bilinear', align_corners=True)
         feat_out32 = F.interpolate(feat_out32, (H, W), mode='bilinear', align_corners=True)
-        return feat_out, feat_out16, feat_out32
+        return torch.sigmoid(feat_out) #, feat_out16, feat_out32
 
     def init_weight(self):
         for ly in self.children():
