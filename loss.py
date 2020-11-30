@@ -5,16 +5,19 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from segmentation_models_pytorch.utils import base
+import numpy as np 
+from torch import einsum
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-class OhemCELoss(nn.Module):
-    def __init__(self, thresh, n_min, ignore_lb=255, *args, **kwargs):
-        super().__init__()
+class OhemBCELoss(base.Loss):
+    def __init__(self, thresh=0.7, n_min=6, ignore_lb=255, *args, **kwargs):
+        super().__init__(**kwargs)
         self.thresh    = -torch.log(torch.tensor(thresh, dtype=torch.float)).to(device)
         self.n_min     = n_min
         self.ignore_lb = ignore_lb
-        self.criteria  = nn.CrossEntropyLoss(ignore_index=ignore_lb, reduction='none')
+        self.criteria  = nn.BCELoss()
 
     def forward(self, logits, labels):
         N, C, H, W = logits.size()
@@ -27,11 +30,11 @@ class OhemCELoss(nn.Module):
         return torch.mean(loss)
 
 
-class SoftmaxFocalLoss(nn.Module):
-    def __init__(self, gamma, ignore_lb=255, *args, **kwargs):
-        super().__init__()
+class SoftmaxFocalLoss(base.Loss):
+    def __init__(self, gamma=2, ignore_lb=255, *args, **kwargs):
+        super().__init__(**kwargs)
         self.gamma = gamma
-        self.nll = nn.NLLLoss(ignore_index=ignore_lb)
+        self.nll   = nn.NLLLoss(ignore_index=ignore_lb)
 
     def forward(self, logits, labels):
         scores    = F.softmax(logits, dim=1)
@@ -40,83 +43,126 @@ class SoftmaxFocalLoss(nn.Module):
         log_score = factor * log_score
         loss      = self.nll(log_score, labels)
         return loss
-
-class BCELoss2d(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.bce_loss = nn.BCELoss()
     
-    def forward(self, predict, target):
-        predict = predict.view(-1)
-        target  = target.view(-1)
-        return self.bce_loss(predict, target)
-
-class NLLLoss2d(nn.Module):
-    def __init__(self, weight=None, size_average=True):
-        super().__init__()
-        self.nll_loss = nn.NLLLoss(weight, size_average, reduction='mean') #NLLLoss2d
-
-    def forward(self, predict, target):
-        return self.nll_loss(F.log_softmax(predict, dim=-1), target)
-
-class CrossEntropyLoss2d(nn.Module):
-    def __init__(self, weight=None, size_average=True):
-        super().__init__()
-        self.ce_loss = nn.CrossEntropyLoss(weight, size_average, reduction='mean') #NLLLoss2d
-
-    def forward(self, predict, target):
-        predict = predict.view(-1)
-        target  = target.view(-1)
-        return self.ce_loss(predict, target)
     
-class DiceLoss(nn.Module):
+   
+    
+def jaccard(intersection, union, eps=1e-15):
+    return (intersection) / (union - intersection + eps)
 
-    def __init__(self, eps=1., beta=1., ignore_channels=None, **kwargs):
+def dice(intersection, union, eps=1e-15, smooth=1.):
+    return (2. * intersection + smooth) / (union + smooth + eps)
+
+
+class BCEDiceLoss(base.Loss):
+    
+    def __init__(self, bce_weight=0.3, mode="dice", eps=1e-7, weight=None, smooth=1., **kwargs):
         super().__init__(**kwargs)
-        self.eps = eps
-        self.beta = beta
-        self.ignore_channels = ignore_channels
+        self.nll_loss   = torch.nn.BCEWithLogitsLoss(weight=weight)
+        self.bce_weight = bce_weight
+        self.eps        = eps
+        self.mode       = mode
+        self.smooth     = smooth
 
-    def forward(self, predict, target):
-        
-        return 1 - f_score(predict, target, beta=self.beta, eps=self.eps, threshold=None, ignore_channels=self.ignore_channels )
+    def forward(self, outputs, targets):    
+        loss = self.bce_weight * self.nll_loss(outputs, targets)
+
+        if self.bce_weight < 1.:
+            targets      = (targets == 1).float()
+            outputs      = torch.sigmoid(outputs)
+            intersection = (outputs * targets).sum()
+            union        = outputs.sum() + targets.sum()
+            if self.mode == "dice":
+                score = dice(intersection, union, self.eps, self.smooth)
+            elif self.mode == "jaccard":
+                score = jaccard(intersection, union, self.eps)
+            loss -= (1 - self.bce_weight) * torch.log(score)
+        return loss
     
-def f_score(pr, gt, beta=1, eps=1e-7, threshold=None, ignore_channels=None):
-    """Calculate F-score between ground truth and prediction
-    Args:
-        pr (torch.Tensor): predicted tensor
-        gt (torch.Tensor):  ground truth tensor
-        beta (float): positive constant
-        eps (float): epsilon to avoid zero division
-        threshold: threshold for outputs binarization
-    Returns:
-        float: F score
+    
+    
+class BinaryFocalLoss(base.Loss):
+    """ https://arxiv.org/abs/1708.02002)
+    inputs :
+        - alpha: (tensor) 3D or 4D the scalar factor for this criterion
+        - gamma: (float,double) gamma > 0 reduces the relative loss for well-classified examples (p>0.5) putting more focus on hard misclassified example
+        - reduction: `none`|`mean`|`sum`
+        - **kwargs
+            balance_index: (int) balance class index, should be specific when alpha is float
     """
 
-    pr = _threshold(pr, threshold=threshold)
-    pr, gt = _take_channels(pr, gt, ignore_channels=ignore_channels)
+    def __init__(self, alpha=[1.0, 1.0], gamma=2, ignore_index=None, reduction='mean'):
+        super(BinaryFocalLoss, self).__init__()
+        if alpha is None:
+            alpha = [0.25, 0.75]
+        self.alpha        = alpha
+        self.gamma        = gamma
+        self.smooth       = 1e-6
+        self.ignore_index = ignore_index
+        self.reduction    = reduction
+        assert self.reduction in ['none', 'mean', 'sum']
+        if self.alpha is None:
+            self.alpha = torch.ones(2)
+        elif isinstance(self.alpha, (list, np.ndarray)):
+            self.alpha = np.asarray(self.alpha)
+            self.alpha = np.reshape(self.alpha, (2))
+            assert self.alpha.shape[0] == 2, 'the `alpha` shape is not match the number of class'
+        elif isinstance(self.alpha, (float, int)):
+            self.alpha = np.asarray([self.alpha, 1.0 - self.alpha], dtype=np.float).view(2)
+        else:
+            raise TypeError('{} not supported'.format(type(self.alpha)))
 
-    tp = torch.sum(gt * pr)
-    fp = torch.sum(pr) - tp
-    fn = torch.sum(gt) - tp
-
-    score = ((1 + beta ** 2) * tp + eps) / ((1 + beta ** 2) * tp + beta ** 2 * fn + fp + eps)
-
-    return score
-
-def _take_channels(*xs, ignore_channels=None):
-    if ignore_channels is None:
-        return xs
-    else:
-        channels = [channel for channel in range(xs[0].shape[1]) if channel not in ignore_channels]
-        xs = [torch.index_select(x, dim=1, index=torch.tensor(channels).to(x.device)) for x in xs]
-        return xs
-
-
-def _threshold(x, threshold=None):
-    if threshold is not None:
-        return (x > threshold).type(x.dtype)
-    else:
-        return x
+    def forward(self, output, target):
+        prob = torch.clamp(output, self.smooth, 1.0 - self.smooth)
+        pos_mask = (target == 1).float()
+        neg_mask = (target == 0).float()
+        pos_loss = -self.alpha[0] * torch.pow(torch.sub(1.0, prob), self.gamma) * torch.log(prob) * pos_mask
+        neg_loss = -self.alpha[1] * torch.pow(prob, self.gamma) * torch.log(torch.sub(1.0, prob)) * neg_mask
+        neg_loss = neg_loss.sum()
+        pos_loss = pos_loss.sum()
+        num_pos  = pos_mask.view(pos_mask.size(0), -1).sum()
+        num_neg  = neg_mask.view(neg_mask.size(0), -1).sum()
+        if num_pos == 0:
+            loss = neg_loss
+        else:
+            loss = pos_loss / num_pos + neg_loss / num_neg
+        return loss    
     
+class SurfaceLoss(base.Loss):
+    '''https://github.com/LIVIAETS/boundary-loss'''
+    def __init__(self, idx_filtered=1):
+        super(SurfaceLoss, self).__init__()
+        # idx_filtered is used to filter out some classes of the target mask. Use fancy indexing
+        self.idc = idx_filtered #kwargs["idc"]
+
+    def forward(self, probs, dist_maps):
+
+        pc = probs[:, ...]#self.idc, ...].type(torch.float32)
+        dc = dist_maps[:, ...]#self.idc, ...].type(torch.float32)
+
+        multipled = einsum("bcwh,bcwh->bcwh", pc, dc)
+
+        loss = multipled.mean()
+
+        return loss
     
+class GeneralizedDice(base.Loss):
+    def __init__(self, idx_filtered=1):
+        super(GeneralizedDice, self).__init__()
+        # idx_filtered is used to filter out some classes of the target mask. Use fancy indexing
+        self.idc = idx_filtered
+
+    def forward(self, probs, target):
+
+        pc = probs[:, ...]
+        tc = target[:, ...]
+
+        w = 1 / ((einsum("bcwh->bc", tc) + 1e-10) ** 2)
+        intersection = w * einsum("bcwh,bcwh->bc", pc, tc)
+        union = w * (einsum("bcwh->bc", pc) + einsum("bcwh->bc", tc))
+
+        divided = 1 - 2 * (einsum("bc->b", intersection) + 1e-10) / (einsum("bc->b", union) + 1e-10)
+
+        loss = divided.mean()
+
+        return loss    

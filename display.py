@@ -22,8 +22,10 @@ def display_batch(batch_tensor, nrow=5):
 def display_segmentation(image, label, colorbar=False):
     fig = plt.figure(figsize=(12, 10))
     mask = np.ma.masked_where(label == 0, label)
-    plt.imshow(image)
-    plt.imshow(mask, cmap='jet', alpha=0.5) # interpolation='none'
+    image_mean = np.mean(image,axis=2)
+    image_mean = np.repeat(image_mean[:, :, np.newaxis], 3, axis=2)
+    image_mean[mask.squeeze()] = [1,0,0]
+    plt.imshow(image_mean, cmap='gray',vmin=0,vmax=1)
     plt.axis('off')
     if colorbar: # for logit
         plt.colorbar()
@@ -33,14 +35,22 @@ def display_proba(image, proba):
     if image.max() < 100:
         vmax = 1
     mask_proba = np.ma.masked_where(proba < 0.001, proba)
-    fig = plt.figure(figsize=(10, 5))
-    plt.imshow(image, vmin=0, vmax=vmax)
-    plt.title('probabilities')
-    plt.imshow(mask_proba, cmap='jet', alpha=0.5) # interpolation='none'
-    plt.axis('off')
-    divider = make_axes_locatable(plt.gca())
-    cax = divider.append_axes("right", size="5%", pad=0.05)
-    plt.colorbar(cax=cax)
+    n = proba.shape[1]
+    fig = plt.figure(figsize=(8*n,6))
+    image_mean = np.mean(image.permute(1,2,0).numpy(),axis=2)
+    for i in range(n):
+        plt.subplot(1,n,i+1)
+        plt.imshow(image_mean, vmin=0, vmax=vmax)
+        plt.imshow(mask_proba[0,i,:,:].squeeze(), cmap='jet', alpha=0.5) # interpolation='none'
+        plt.axis('off')
+        if n > 1:
+            plt.title("class " + str(i))
+            plt.suptitle("probabilities",fontsize=25)
+        else:
+            plt.title('probabilities')
+        divider = make_axes_locatable(plt.gca())
+        cax = divider.append_axes("right", size="5%", pad=0.05)
+        plt.colorbar(cax=cax)
     return fig
 
 def display_result(image, true_label, proba, threshold, metric, display=False):
@@ -48,7 +58,7 @@ def display_result(image, true_label, proba, threshold, metric, display=False):
     if image.max() < 100:
         vmax = 1
     
-    fig = plt.figure(figsize=(15, 10))
+    fig = plt.figure(figsize=(15, 5))
     # ground truth
     plt.subplot(131)
     plt.imshow((255*image).astype('uint8'), vmin=0, vmax=vmax) # interpolation='none'
@@ -57,7 +67,6 @@ def display_result(image, true_label, proba, threshold, metric, display=False):
     # probabilities
     mask_proba = proba#np.ma.masked_where(proba < 0.001, proba)
     plt.subplot(132)
-    plt.imshow(image.astype('uint8'), vmin=0, vmax=vmax)
     plt.title('probabilities')
     plt.imshow(mask_proba, cmap='jet', alpha=0.5) # interpolation='none'
     plt.axis('off')
@@ -82,7 +91,9 @@ def display_result(image, true_label, proba, threshold, metric, display=False):
     mask_predict[FP] = colors[2] # red
     mask_predict[FN] = colors[3] # orange
     n = label.size
-    label_type = ["TP : {:2.1f} %".format(100*TP.sum()/n),"TN : {:2.1f} %".format(100*TN.sum()/n),"FP : {:2.1f} %".format(100*TP.sum()/n),"FN : {:2.1f} %".format(100*FN.sum()/n)]
+    pos = (label == 1.).sum()
+    neg = (label == 0.).sum()
+    label_type = ["TP : {:2.1f} %".format(100*TP.sum()/pos),"TN : {:2.1f} %".format(100*TN.sum()/neg),"FP : {:2.1f} %".format(100*TP.sum()/pos),"FN : {:2.1f} %".format(100*FN.sum()/pos)]
     legend     = [patches.Patch(color=colors[i]/255, label="{}".format(label_type[i])) for i in range(len(colors))]
     score      = metric(proba, true_label)
     plt.imshow(mask_predict, interpolation='none')

@@ -5,7 +5,6 @@ from PIL import Image
 from torch.utils.data.dataset import Dataset
 import random
 from torch.utils.data import Dataset as BaseDataset
-import cv2
 import albumentations as albu
 import pandas as pd
 import os
@@ -55,33 +54,53 @@ class Dataset_SMP(BaseDataset):
     
     """
     
-    def __init__(self, images_dir, masks_dir, augmentation=None, preprocessing=None, landmarks_dir=None):
+    def __init__(self, images_dir, masks_dir, input_size=448, augmentation=None, preprocessing=None, landmarks_dir=None):
         self.images_dir    = images_dir
         self.masks_dir     = masks_dir
         self.preprocessing = preprocessing
+        self.input_size    = input_size
         if landmarks_dir:
-            self.landmarks_bool = True
+            self.use_landmarks  = True
             self.landmarks_file = pd.read_csv(landmarks_dir)
             self.augmentation   = albu.Compose(augmentation, keypoint_params=albu.KeypointParams(format='xy'))
         else:
-            self.landmarks_bool = False
-            self.augmentation   = albu.Compose(augmentation)
+            self.use_landmarks  = False
+            self.augmentation   = augmentation
     
     def __getitem__(self, i):
-        # open image
-        image = cv2.imread(self.images_dir[i])
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        mask  = cv2.imread(self.masks_dir[i], 0)
-        # expand mask dimension
-        mask = np.expand_dims(mask, 2).astype(float)
+        # open image 
+        image = np.array(Image.open(self.images_dir[i]))
+        mask  = np.array(Image.open(self.masks_dir[i]).convert('P'))
+        if os.path.basename(self.images_dir[i]).replace('.jpg','').replace('.png','') != os.path.basename(self.masks_dir[i]).replace('.jpg','').replace('.png',''):
+            print('ERROR : name mask != image')
+        if image.shape[0:2] != mask.shape :
+            print('ERROR : size mask != image')  
+        
+        # format mask to class
+        #mask = np.array(mask)
+        #mask = np.where(mask>mask.max()*0.4, 1., 0.)
+        
         # get landmarks
-        if self.landmarks_bool:
+        if self.use_landmarks:
             landmarks = self.landmarks_file[self.landmarks_file['image_name'] == os.path.basename(self.images_dir[i])].iloc[:,1:]
             landmarks = np.array(landmarks).reshape(-1, 2)
+            
+        # resize all
+        if self.input_size:
+            if self.use_landmarks:
+                sample = resize(self.input_size)(image=image, mask=mask, keypoints=landmarks)
+                image, mask, landmarks = sample['image'], sample['mask'], np.array(sample['keypoints'])
+            else:
+                sample = resize(self.input_size)(image=image, mask=mask)
+                image, mask = sample['image'], sample['mask']                        
+         
         # apply augmentations
         if self.augmentation:
-            if self.landmarks_bool:
-                sample    = self.augmentation(image=image, mask=mask, keypoints=landmarks)
+            color_mask = OnlyOnMask([albu.RGBShift([-150, 150], p=0.1)])
+            sample     = color_mask(image=image, mask=mask)
+            image      = sample['image']
+            if self.use_landmarks:
+                sample     = self.augmentation(image=image, mask=mask, keypoints=landmarks)
                 image, mask, landmarks = sample['image'], sample['mask'], np.array(sample['keypoints'])
             else:
                 sample      = self.augmentation(image=image, mask=mask)
@@ -93,60 +112,82 @@ class Dataset_SMP(BaseDataset):
             image, mask = sample['image'], sample['mask']
         
         # stack heatmap to image
-        if self.landmarks_bool:
+        if self.use_landmarks:
             if len(landmarks)==0:
                 print("Landmark file not found !")
             landmarks_heatmap = landmark_heatmap(landmarks, image.shape[0], image.shape[1])
             image = np.dstack((image,landmarks_heatmap))
         
+        # one-hot encode mask for multiclass
+        classes = np.unique(mask)
+        if len(classes) > 2:
+            masks = [(mask == c) for c in (1,2,3)]
+            mask  = np.stack(masks, axis=-1).astype('float')
+        
         # transform to tensor format
         sample      = get_tensor()(image=image, mask=mask)
         image, mask = sample['image'], sample['mask']
-        # format mask to class
-        mask  = np.where(mask > mask.max()*0.5, 1, 0)
         
         return image, mask
 
     def __len__(self):
         return len(self.images_dir)
 
-def get_training_augmentation(height, width):
+# TODO : add Compose ?
+def get_training_augmentation():
     """Transformation for training set
     input : 
-        - height : integer for height resizing
-        - width  : integer for width resizing
+        - input_size : integer for resizing maximum side
     output :
         - transform : object albumentations.Compose
     """    
     train_transform = [
         albu.HorizontalFlip(p=0.5),
         albu.ShiftScaleRotate(scale_limit=(-0.5, 0.5), rotate_limit=[-15,15], shift_limit=[-0.1,0.1], p=1, border_mode=0),
-        albu.Resize(height, width),
         albu.IAAPerspective(p=0.2),
-        albu.OneOf([albu.CLAHE(p=1), albu.RandomBrightness(p=1), albu.RandomGamma(p=1)], p=0.7),
-        albu.OneOf([albu.Blur(blur_limit=20, p=1), albu.MotionBlur(blur_limit=20, p=1)], p=0.3),
-        albu.OneOf([albu.RandomContrast(p=1), albu.HueSaturationValue(p=1)], p=0.5),
+        albu.OneOf([albu.CLAHE(p=1), albu.RandomBrightness(p=1), albu.RandomGamma(p=1)], p=0.3),
+        albu.OneOf([albu.Blur(blur_limit=10, p=1), albu.MotionBlur(blur_limit=10, p=1)], p=0.3),
+        albu.OneOf([albu.RandomContrast(p=1), albu.HueSaturationValue(p=1)], p=0.2),
         albu.OneOf([albu.IAAAdditiveGaussianNoise(), albu.GaussNoise()], p=0.2),
         albu.HueSaturationValue(p=0.2),
         albu.ISONoise(p=0.1),
         albu.RGBShift(p=0.1),
         #albu.OneOf([albu.OpticalDistortion(p=0.3,distort_limit=0.02),albu.GridDistortion(p=0.2,distort_limit=0.15), albu.IAAPiecewiseAffine(p=0.3, scale=(0.01, 0.01))])
     ]
-    return train_transform
+    return albu.Compose(train_transform)
+
+class OnlyOnMask(albu.Sequential):
+    def __call__(self, **data):
+        image = data['image'].copy()
+        data  = super(OnlyOnMask, self).__call__(**data)
+        mask  = data['mask'].astype(np.bool)
+        image[mask]   = data['image'][mask]
+        data['image'] = image
+        return data
 
 
-def get_validation_augmentation(height, width):
+def resize(input_size, deform="rectangular"):
     """Transformation for validation set
     input : 
-        - height : integer for height resizing
-        - width  : integer for width resizing
+        - input_size : integer for resizing maximum side
     output :
         - transform : albumentations object
     """
-    return [albu.Resize(height, width)]
+    if deform=="square":
+        transform = albu.Resize(input_size, input_size)
+    elif deform=="scale":
+        transform = albu.LongestMaxSize(input_size)
+    elif deform=="rectangular":
+        transform = albu.Resize(input_size[0], input_size[1])
+    else:
+        print("deform argument unknown")
+        
+    return transform
 
 def to_tensor(x, **kwargs):
     """Return input in tensor format"""
+    if len(x.shape)==2:
+        x = np.expand_dims(x, 2)
     return x.transpose(2, 0, 1).astype('float32')
 
 def get_tensor():
@@ -238,7 +279,7 @@ def split_data(data_root, image_paths, img_ext, mask_paths, msk_ext, size_datase
         # create dictionnary according to name
         image_list = {}
         for image_ref in folder_image:
-            image_id  = os.path.basename(image_ref)[:4]
+            image_id  = os.path.basename(image_ref)[:3]
             subset_id = []
             for image in folder_image:
                 if image_id in os.path.basename(image):
@@ -272,7 +313,12 @@ def split_data(data_root, image_paths, img_ext, mask_paths, msk_ext, size_datase
             test_list.extend(image_list[test_id[i]])
         test_image = [os.path.join(data_root, image_paths, image_name+img_ext) for image_name in test_list]
         test_mask  = [os.path.join(data_root, mask_paths, mask_name+msk_ext) for mask_name in test_list]         
-          
+        # print infos
+        print('TOTAL :',len(folder_image),' images - ',len(image_list_id),' personnes')
+        print('train :',len(train_image),' images - ',len(train_id),' personnes')
+        print('valid :',len(valid_image),' images - ',len(valid_id),' personnes')
+        print('test  :',len(test_image),' images - ',len(test_id),' personnes')
+        
     train_set = (train_image, train_mask)
     valid_set = (valid_image, valid_mask)
     test_set  = (test_image, test_mask)
