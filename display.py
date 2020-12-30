@@ -19,16 +19,16 @@ def display_batch(batch_tensor, nrow=5):
     plt.axis('off')
     plt.show()
     
-def display_segmentation(image, label, colorbar=False):
-    fig = plt.figure(figsize=(12, 10))
+def display_segmentation(image, label, score=None):
+    fig  = plt.figure(figsize=(12, 10))
     mask = np.ma.masked_where(label == 0, label)
     image_mean = np.mean(image,axis=2)
     image_mean = np.repeat(image_mean[:, :, np.newaxis], 3, axis=2)
     image_mean[mask.squeeze()] = [1,0,0]
     plt.imshow(image_mean, cmap='gray',vmin=0,vmax=1)
     plt.axis('off')
-    if colorbar: # for logit
-        plt.colorbar()
+    if score:
+        plt.title(score)
     return fig
    
 def display_proba(image, proba):
@@ -41,7 +41,7 @@ def display_proba(image, proba):
     for i in range(n):
         plt.subplot(1,n,i+1)
         plt.imshow(image_mean, vmin=0, vmax=vmax)
-        plt.imshow(mask_proba[0,i,:,:].squeeze(), cmap='jet', alpha=0.5) # interpolation='none'
+        plt.imshow(mask_proba[0,i,:,:].squeeze(), cmap='jet', alpha=0.3) # interpolation='none'
         plt.axis('off')
         if n > 1:
             plt.title("class " + str(i))
@@ -53,53 +53,49 @@ def display_proba(image, proba):
         plt.colorbar(cax=cax)
     return fig
 
-def display_result(image, true_label, proba, threshold, metric, display=False):
+def display_result(image, true_label, proba, threshold, metric, display=False, legend=False):
     
     if image.max() < 100:
         vmax = 1
     
     fig = plt.figure(figsize=(15, 5))
     # ground truth
-    plt.subplot(131)
-    plt.imshow((255*image).astype('uint8'), vmin=0, vmax=vmax) # interpolation='none'
-    plt.axis('off')
-    plt.title('Image')
-    # probabilities
-    mask_proba = proba#np.ma.masked_where(proba < 0.001, proba)
-    plt.subplot(132)
-    plt.title('probabilities')
-    plt.imshow(mask_proba, cmap='jet', alpha=0.5) # interpolation='none'
-    plt.axis('off')
-    divider = make_axes_locatable(plt.gca())
-    cax = divider.append_axes("right", size="5%", pad=0.05)
-    plt.colorbar(cax=cax)
-    # prediction
-    plt.subplot(133)
-    probas = proba.squeeze().detach().cpu().numpy()
-    label  = true_label.squeeze().detach().cpu().numpy()
-    prediction      = (probas >= threshold)
+    plt.subplot(121)
+    #plt.imshow((255*image).astype('uint8'), vmin=0, vmax=vmax) # interpolation='none'
+    probas = proba.squeeze()
+    label  = true_label.squeeze().numpy()
+    prediction      = (probas >= threshold).numpy().astype(float)
     good_prediction = (label == prediction)
     bad_prediction  = (label != prediction)
     TP = good_prediction & (label == 1.)
     TN = good_prediction & (label == 0.)
     FP = bad_prediction & (label == 1.)
     FN = bad_prediction & (label == 0.)
-    mask_predict = np.zeros((label.shape[0],label.shape[1],3)).astype(np.uint8)
     colors = np.array([[0,255,0], [0,0,255], [255,0,0], [255,140,0]])
-    mask_predict[TP] = colors[0] # green
-    mask_predict[TN] = colors[1] # blue
-    mask_predict[FP] = colors[2] # red
-    mask_predict[FN] = colors[3] # orange
-    n = label.size
-    pos = (label == 1.).sum()
-    neg = (label == 0.).sum()
-    label_type = ["TP : {:2.1f} %".format(100*TP.sum()/pos),"TN : {:2.1f} %".format(100*TN.sum()/neg),"FP : {:2.1f} %".format(100*TP.sum()/pos),"FN : {:2.1f} %".format(100*FN.sum()/pos)]
+    mask_predict = image.copy()
+    mask_predict[TP,:] = colors[0] # green
+    mask_predict[FP,:] = colors[2] # red
+    mask_predict[FN,:] = colors[3] # orange
+    label_type = ["TP","TN","FP","FN"]
     legend     = [patches.Patch(color=colors[i]/255, label="{}".format(label_type[i])) for i in range(len(colors))]
     score      = metric(proba, true_label)
-    plt.imshow(mask_predict, interpolation='none')
+    plt.imshow(mask_predict)
     plt.title('IoU score : {:.2f} %'.format(100*score.numpy()))
-    plt.legend(handles=legend, bbox_to_anchor=(1.05, 1), loc=2, borderaxespad=0. )
+    if legend:
+        plt.legend(handles=legend, bbox_to_anchor=(1.05, 1), loc=2, borderaxespad=0. )
     plt.xticks(()),plt.yticks(())
+    plt.axis('off')
+    plt.title('Image')
+    # probabilities
+    mask_proba = proba.numpy()#np.ma.masked_where(proba < 0.001, proba)
+    plt.subplot(122)
+    plt.title('probabilities')
+    plt.imshow(image)
+    plt.imshow(mask_proba, cmap='jet', alpha=0.5) # interpolation='none'
+    plt.axis('off')
+    divider = make_axes_locatable(plt.gca())
+    cax = divider.append_axes("right", size="5%", pad=0.05)
+    plt.colorbar(cax=cax)
     if display:
         plt.show()
     

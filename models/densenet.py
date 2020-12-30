@@ -80,8 +80,10 @@ def center_crop(layer, max_height, max_width):
     return layer[:, :, xy2:(xy2 + max_height), xy1:(xy1 + max_width)]
 
 class FCDenseNet(nn.Module):
-    def __init__(self, in_channels=3, down_blocks=(5,5,5,5,5), up_blocks=(5,5,5,5,5), bottleneck_layers=5, growth_rate=16, out_chans_first_conv=48, n_classes=12):
+    def __init__(self, in_channels=3, down_blocks=(5,5,5,5,5), up_blocks=(5,5,5,5,5), bottleneck_layers=5, growth_rate=16, out_chans_first_conv=48, n_classes=12, activation="sigmoid"):
         super().__init__()
+        
+        self.activation = activation
         self.down_blocks = down_blocks
         self.up_blocks = up_blocks
         cur_channels_count = 0
@@ -154,8 +156,15 @@ class FCDenseNet(nn.Module):
             out = self.denseBlocksUp[i](out)
 
         out = self.finalConv(out)
-        out = self.softmax(out)
-        return out
+
+        # activation
+        if self.activation == "sigmoid":
+            output = torch.sigmoid(out)
+        else:
+            activation = nn.Softmax(dim=1)
+            output = activation(out)    
+
+        return output.squeeze()
 
 
 def FCDenseNet57(n_classes):

@@ -3,6 +3,8 @@
 import torch
 from numpy import isnan
 from scipy.spatial.distance import directed_hausdorff
+from segmentation_models_pytorch.utils import base
+from sklearn import metrics
 
 def IoU_score(predictions, labels):
 
@@ -51,8 +53,27 @@ def haussdorf(preds, target):
 
     return res
 
-
 def numpy_haussdorf(pred, target):
     assert len(pred.shape) == 2
     assert pred.shape == target.shape
     return max(directed_hausdorff(pred, target)[0], directed_hausdorff(target, pred)[0])
+
+
+def confusion_matrix(pred, target): 
+    tn, fp, fn, tp = metrics.confusion_matrix(pred.view(-1), target.view(-1)).ravel()
+    return tn, fp, fn, tp 
+    
+    
+class ConfusionMatrix(base.Metric):
+    __name__ = 'confusion_matrix'
+
+    def __init__(self, eps=1e-7, threshold=0.5, activation=None, ignore_channels=None, **kwargs):
+        super().__init__(**kwargs)
+        self.eps = eps
+        self.threshold = threshold
+        self.activation = Activation(activation)
+        self.ignore_channels = ignore_channels
+
+    def forward(self, y_pr, y_gt):
+        y_pr = self.activation(y_pr)
+        return metrics.confusion_matrix(y_pr.view(-1), y_gt.view(-1))

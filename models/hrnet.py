@@ -200,10 +200,11 @@ blocks_dict = {'BASIC': BasicBlock,'BOTTLENECK': Bottleneck}
 
 class HighResolutionNet(nn.Module):
 
-    def __init__(self, config, **kwargs):
+    def __init__(self, n_classes, config, activation="sigmoid", **kwargs):
         
         super(HighResolutionNet, self).__init__()
-
+        self.n_classes  = n_classes
+        self.activation = activation
         # stem net
         self.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=2, padding=1, bias=False)
         self.bn1   = BatchNorm2d(64, momentum=BN_MOMENTUM)
@@ -245,7 +246,7 @@ class HighResolutionNet(nn.Module):
             nn.Conv2d(in_channels=last_inp_channels,out_channels=last_inp_channels, kernel_size=1, stride=1, padding=0),
             BatchNorm2d(last_inp_channels, momentum=BN_MOMENTUM),
             nn.ReLU(inplace=False),
-            nn.Conv2d(in_channels=last_inp_channels,out_channels=config.NUM_CLASSES, kernel_size=config.FINAL_CONV_KERNEL, stride=1, padding=1 if config.FINAL_CONV_KERNEL == 3 else 0)
+            nn.Conv2d(in_channels=last_inp_channels,out_channels=n_classes, kernel_size=config.FINAL_CONV_KERNEL, stride=1, padding=1 if config.FINAL_CONV_KERNEL == 3 else 0)
         )
 
     def _make_transition_layer(self, num_channels_pre_layer, num_channels_cur_layer):
@@ -256,14 +257,8 @@ class HighResolutionNet(nn.Module):
             if i < num_branches_pre:
                 if num_channels_cur_layer[i] != num_channels_pre_layer[i]:
                     transition_layers.append(nn.Sequential(
-                        nn.Conv2d(num_channels_pre_layer[i],
-                                  num_channels_cur_layer[i],
-                                  3,
-                                  1,
-                                  1,
-                                  bias=False),
-                        BatchNorm2d(
-                            num_channels_cur_layer[i], momentum=BN_MOMENTUM),
+                        nn.Conv2d(num_channels_pre_layer[i], num_channels_cur_layer[i], 3, 1, 1, bias=False),
+                        BatchNorm2d(num_channels_cur_layer[i], momentum=BN_MOMENTUM),
                         nn.ReLU(inplace=False)))
                 else:
                     transition_layers.append(None)
@@ -374,7 +369,14 @@ class HighResolutionNet(nn.Module):
 
         x = self.last_layer(x)
 
-        return x
+        # activation
+        if self.activation == "sigmoid":
+            output = torch.sigmoid(x)
+        else:
+            activation = nn.Softmax(dim=1)
+            output = activation(x)        
+
+        return output.squeeze()
 
     def init_weights(self, pretrained='',):
         logger.info('=> init weights from normal distribution')

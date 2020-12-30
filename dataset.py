@@ -42,7 +42,6 @@ class CustomDataset(Dataset):
         return len(self.image_paths)
 
 
-
 class Dataset_SMP(BaseDataset):
     """Read images, apply augmentation and preprocessing transformations.    
     input : 
@@ -62,7 +61,10 @@ class Dataset_SMP(BaseDataset):
         if landmarks_dir:
             self.use_landmarks  = True
             self.landmarks_file = pd.read_csv(landmarks_dir)
-            self.augmentation   = albu.Compose(augmentation, keypoint_params=albu.KeypointParams(format='xy'))
+            if augmentation:
+                self.augmentation = albu.Compose(augmentation, keypoint_params=albu.KeypointParams(format='xy'))
+            else:
+                self.augmentation = augmentation
         else:
             self.use_landmarks  = False
             self.augmentation   = augmentation
@@ -77,18 +79,20 @@ class Dataset_SMP(BaseDataset):
             print('ERROR : size mask != image')  
         
         # format mask to class
-        #mask = np.array(mask)
-        #mask = np.where(mask>mask.max()*0.4, 1., 0.)
+        if '.jpg' in os.path.basename(self.masks_dir[i]):
+            mask = np.array(mask)
+            mask = np.where(mask>mask.max()*0.4, 1., 0.)
         
         # get landmarks
         if self.use_landmarks:
             landmarks = self.landmarks_file[self.landmarks_file['image_name'] == os.path.basename(self.images_dir[i])].iloc[:,1:]
             landmarks = np.array(landmarks).reshape(-1, 2)
-            
+
         # resize all
         if self.input_size:
             if self.use_landmarks:
-                sample = resize(self.input_size)(image=image, mask=mask, keypoints=landmarks)
+                # do : albu compose
+                sample = albu.Compose([resize(self.input_size)], keypoint_params=albu.KeypointParams(format='xy'))(image=image, mask=mask, keypoints=landmarks)
                 image, mask, landmarks = sample['image'], sample['mask'], np.array(sample['keypoints'])
             else:
                 sample = resize(self.input_size)(image=image, mask=mask)
@@ -140,7 +144,7 @@ def get_training_augmentation():
         - input_size : integer for resizing maximum side
     output :
         - transform : object albumentations.Compose
-    """    
+    """
     train_transform = [
         albu.HorizontalFlip(p=0.5),
         albu.ShiftScaleRotate(scale_limit=(-0.5, 0.5), rotate_limit=[-15,15], shift_limit=[-0.1,0.1], p=1, border_mode=0),
@@ -246,19 +250,17 @@ def landmark_heatmap(landmarks, width, height):
     
     return heatmap
 
-
-
 # fix seed
-random.seed(123456)
-np.random.seed(123456)
+random.seed(12345)
+np.random.seed(12345)
 
-
-def split_data(data_root, image_paths, img_ext, mask_paths, msk_ext, size_dataset, use_id=False, train_factor=0.8, valid_factor=0.1, test_factor=0.1):
-        
+def split_data(data_root, image_paths, img_ext, mask_paths, msk_ext, size_dataset=100, use_id=False, train_factor=0.8, valid_factor=0.1, test_factor=0.1):
+    # fix seed
+    random.seed(12345)
+    np.random.seed(12345)     
     # path
     folder_image = glob.glob(os.path.join(data_root, image_paths)+"\\*"+img_ext)
     folder_mask  = glob.glob(os.path.join(data_root, mask_paths,)+"\\*"+msk_ext)
-        
     if not use_id:
         # suffle the 2 lists the same way (to be sure)
         lists_shuffled = list(zip(folder_image, folder_mask))
@@ -275,6 +277,11 @@ def split_data(data_root, image_paths, img_ext, mask_paths, msk_ext, size_datase
         valid_mask  = folder_mask[train_size:train_size+valid_size]
         test_image  = folder_image[train_size+valid_size:]
         test_mask   = folder_mask[train_size+valid_size:]
+        # print infos
+        print('TOTAL :',len(folder_image),' images')
+        print(' - train :',len(train_image),' images')
+        print(' - valid :',len(valid_image),' images')
+        print(' - test  :',len(test_image),' images')
     else:
         # create dictionnary according to name
         image_list = {}

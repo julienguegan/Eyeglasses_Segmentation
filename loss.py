@@ -145,24 +145,3 @@ class SurfaceLoss(base.Loss):
         loss = multipled.mean()
 
         return loss
-    
-class GeneralizedDice(base.Loss):
-    def __init__(self, idx_filtered=1):
-        super(GeneralizedDice, self).__init__()
-        # idx_filtered is used to filter out some classes of the target mask. Use fancy indexing
-        self.idc = idx_filtered
-
-    def forward(self, probs, target):
-
-        pc = probs[:, ...]
-        tc = target[:, ...]
-
-        w = 1 / ((einsum("bcwh->bc", tc) + 1e-10) ** 2)
-        intersection = w * einsum("bcwh,bcwh->bc", pc, tc)
-        union = w * (einsum("bcwh->bc", pc) + einsum("bcwh->bc", tc))
-
-        divided = 1 - 2 * (einsum("bc->b", intersection) + 1e-10) / (einsum("bc->b", union) + 1e-10)
-
-        loss = divided.mean()
-
-        return loss    
