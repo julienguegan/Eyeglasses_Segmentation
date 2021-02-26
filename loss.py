@@ -6,6 +6,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from segmentation_models_pytorch.utils import base
+from segmentation_models_pytorch.utils.base import Activation
+from skimage.metrics import hausdorff_distance
 import numpy as np 
 from torch import einsum
 
@@ -145,3 +147,42 @@ class SurfaceLoss(base.Loss):
         loss = multipled.mean()
 
         return loss
+    
+class GeneralizedDice(base.Loss):
+    def __init__(self, idx_filtered=1):
+        super(GeneralizedDice, self).__init__()
+        # idx_filtered is used to filter out some classes of the target mask. Use fancy indexing
+        self.idc = idx_filtered
+
+    def forward(self, probs, target):
+
+        pc = probs[:, ...]
+        tc = target[:, ...]
+
+        w = 1 / ((einsum("bcwh->bc", tc) + 1e-10) ** 2)
+        intersection = w * einsum("bcwh,bcwh->bc", pc, tc)
+        union = w * (einsum("bcwh->bc", pc) + einsum("bcwh->bc", tc))
+
+        divided = 1 - 2 * (einsum("bc->b", intersection) + 1e-10) / (einsum("bc->b", union) + 1e-10)
+
+        loss = divided.mean()
+
+        return loss    
+    
+class DiceHausdorffLoss(base.Loss):
+
+    def __init__(self, eps=1., beta=1., activation=None, ignore_channels=None, **kwargs):
+        super().__init__(**kwargs)
+        self.eps = eps
+        self.beta = beta
+        self.activation = Activation(activation)
+        self.ignore_channels = ignore_channels
+
+    def forward(self, y_pr, y_gt):
+        y_pr = self.activation(y_pr)
+        dice = 1 - F.f_score(y_pr, y_gt, beta=self.beta, eps=self.eps, threshold=None, ignore_channels=self.ignore_channels)
+        d_max = 0.03*max(y_pr.shape)
+        hausdorff = torch.tensor(hausdorff_distance(y_pr.numpy(), y_gt.numpy()))/d_max
+        print('dice =',dice.item(),' - hausdorff =', hausdorff.item())
+        sum_loss = dice + hausdorff
+        return sum_loss

@@ -69,15 +69,15 @@ def display_result(image, true_label, proba, threshold, metric, display=False, l
     bad_prediction  = (label != prediction)
     TP = good_prediction & (label == 1.)
     TN = good_prediction & (label == 0.)
-    FP = bad_prediction & (label == 1.)
-    FN = bad_prediction & (label == 0.)
-    colors = np.array([[0,255,0], [0,0,255], [255,0,0], [255,140,0]])
+    FN = bad_prediction & (label == 1.)
+    FP = bad_prediction & (label == 0.)
+    colors = np.array([[0,255,0], [0,0,255], [255,0,0], [255,140,0]])/255
     mask_predict = image.copy()
     mask_predict[TP,:] = colors[0] # green
     mask_predict[FP,:] = colors[2] # red
     mask_predict[FN,:] = colors[3] # orange
     label_type = ["TP","TN","FP","FN"]
-    legend     = [patches.Patch(color=colors[i]/255, label="{}".format(label_type[i])) for i in range(len(colors))]
+    legend     = [patches.Patch(color=colors[i], label="{}".format(label_type[i])) for i in range(len(colors))]
     score      = metric(proba, true_label)
     plt.imshow(mask_predict)
     plt.title('IoU score : {:.2f} %'.format(100*score.numpy()))
@@ -85,7 +85,6 @@ def display_result(image, true_label, proba, threshold, metric, display=False, l
         plt.legend(handles=legend, bbox_to_anchor=(1.05, 1), loc=2, borderaxespad=0. )
     plt.xticks(()),plt.yticks(())
     plt.axis('off')
-    plt.title('Image')
     # probabilities
     mask_proba = proba.numpy()#np.ma.masked_where(proba < 0.001, proba)
     plt.subplot(122)

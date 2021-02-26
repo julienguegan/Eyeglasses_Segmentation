@@ -53,14 +53,15 @@ class Dataset_SMP(BaseDataset):
     
     """
     
-    def __init__(self, images_dir, masks_dir, input_size=448, augmentation=None, preprocessing=None, landmarks_dir=None):
+    def __init__(self, images_dir, masks_dir, input_size=448, augmentation=None, preprocessing=None, landmarks_dir=None, sigma=0.05):
         self.images_dir    = images_dir
         self.masks_dir     = masks_dir
         self.preprocessing = preprocessing
         self.input_size    = input_size
         if landmarks_dir:
             self.use_landmarks  = True
-            self.landmarks_file = pd.read_csv(landmarks_dir)
+            self.landmarks_file = pd.read_csv(landmarks_dir,sep=';')
+            self.sigma = sigma
             if augmentation:
                 self.augmentation = albu.Compose(augmentation, keypoint_params=albu.KeypointParams(format='xy'))
             else:
@@ -79,9 +80,8 @@ class Dataset_SMP(BaseDataset):
             print('ERROR : size mask != image')  
         
         # format mask to class
-        if '.jpg' in os.path.basename(self.masks_dir[i]):
-            mask = np.array(mask)
-            mask = np.where(mask>mask.max()*0.4, 1., 0.)
+        mask = np.array(mask)
+        mask = np.where(mask>mask.max()*0.4, 1., 0.)
         
         # get landmarks
         if self.use_landmarks:
@@ -90,8 +90,14 @@ class Dataset_SMP(BaseDataset):
 
         # resize all
         if self.input_size:
+            if (self.input_size == [0,0]):
+                original_size = list(mask.shape[0:2])
+                self.input_size[0] = original_size[0] - original_size[0] % 32
+                self.input_size[1] = original_size[1] - original_size[1] % 32
+            else:
+                self.input_size[0] = self.input_size[0] - self.input_size[0] % 32
+                self.input_size[1] = self.input_size[1] - self.input_size[1] % 32  
             if self.use_landmarks:
-                # do : albu compose
                 sample = albu.Compose([resize(self.input_size)], keypoint_params=albu.KeypointParams(format='xy'))(image=image, mask=mask, keypoints=landmarks)
                 image, mask, landmarks = sample['image'], sample['mask'], np.array(sample['keypoints'])
             else:
@@ -119,7 +125,7 @@ class Dataset_SMP(BaseDataset):
         if self.use_landmarks:
             if len(landmarks)==0:
                 print("Landmark file not found !")
-            landmarks_heatmap = landmark_heatmap(landmarks, image.shape[0], image.shape[1])
+            landmarks_heatmap = landmark_heatmap(landmarks, image.shape[0], image.shape[1], self.sigma)
             image = np.dstack((image,landmarks_heatmap))
         
         # one-hot encode mask for multiclass
@@ -238,10 +244,10 @@ def gaussian_2D(pt, sigma, width, height):
     
     return img
 
-def landmark_heatmap(landmarks, width, height):
+def landmark_heatmap(landmarks, width, height, s=0.01):
     
-    gaussians   = np.zeros((width,height,len(landmarks)))
-    sigma       = 0.05*max(width, height)//2
+    gaussians   = np.zeros((width, height, len(landmarks)))
+    sigma       = s*max(width, height)//2
     # generate gaussian for each landmark
     for i, landmark in enumerate(landmarks):
         gaussians[:,:,i] = gaussian_2D(landmark, sigma, width, height)

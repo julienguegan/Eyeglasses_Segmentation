@@ -95,7 +95,7 @@ if __name__ == "__main__":
         image_mean = np.mean(image,axis=2)
         image_mean = np.repeat(image_mean[:, :, np.newaxis], 3, axis=2)
         image_mean[prediction] = [1,0,0]
-        image_mean[image_mean<0]=0
+        image_mean[image_mean<0] = 0
         # cropped to eyeglasses zone if requires
         if args.zoom:
             idx = np.where(prediction)
